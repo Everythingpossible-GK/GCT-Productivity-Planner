@@ -1,4 +1,4 @@
-index.html<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -56,7 +56,7 @@ index.html<!DOCTYPE html>
         <div id="table-sidebar-note" class="hidden mt-auto pt-6 border-t border-slate-100">
             <div class="bg-blue-600 p-4 rounded-2xl text-white text-xs">
                 <p class="font-bold mb-1 flex items-center gap-1"><i data-lucide="info" class="w-3.5 h-3.5"></i> Table Mode</p>
-                <p class="opacity-80">Compare planned targets with actual crane performance across all vessels.</p>
+                <p class="opacity-80">Track performance across every 12hr shift until vessel completion.</p>
             </div>
         </div>
     </aside>
@@ -94,10 +94,7 @@ index.html<!DOCTYPE html>
             density: 1.3,
             efficiency: 85,
             shiftHours: 12,
-            actualTph: 0,
-            actualCycleTime: 0,
-            actualWorkingHrs: 0,
-            idleTime: 0,
+            shiftData: {}, // Stores per-shift actuals: { shift_1: { actualTph, actualCycle, actualWork, idleTime } }
             cranes: [
                 { id: 101, model: 'LHM600#08', cbm: 15, count: 1, targetTph: 736 },
                 { id: 102, model: 'ShipCranes', cbm: 8, count: 4, targetTph: 800 },
@@ -131,10 +128,7 @@ index.html<!DOCTYPE html>
             density: 1.3,
             efficiency: 85,
             shiftHours: 12,
-            actualTph: 0,
-            actualCycleTime: 0,
-            actualWorkingHrs: 0,
-            idleTime: 0,
+            shiftData: {},
             cranes: [{ id: Date.now() + 1, model: 'LHM600#08', cbm: 15, count: 1, targetTph: 500 }]
         });
         activeVesselId = newId;
@@ -151,7 +145,18 @@ index.html<!DOCTYPE html>
     function updateVessel(id, field, value) {
         const vessel = vessels.find(v => v.id === id);
         if (vessel) {
-            vessel[field] = (field === 'target' || field === 'density' || field === 'efficiency' || field === 'shiftHours' || field === 'actualTph' || field === 'actualCycleTime' || field === 'actualWorkingHrs' || field === 'idleTime') ? Number(value) : value;
+            vessel[field] = (field === 'target' || field === 'density' || field === 'efficiency' || field === 'shiftHours') ? Number(value) : value;
+            render();
+        }
+    }
+
+    function updateShiftData(vesselId, shiftId, field, value) {
+        const vessel = vessels.find(v => v.id === vesselId);
+        if (vessel) {
+            if (!vessel.shiftData[shiftId]) {
+                vessel.shiftData[shiftId] = { actualTph: 0, actualCycleTime: 0, actualWorkingHrs: 0, idleTime: 0 };
+            }
+            vessel.shiftData[shiftId][field] = Number(value);
             render();
         }
     }
@@ -207,7 +212,29 @@ index.html<!DOCTYPE html>
         const finishDateTime = isValidDate ? new Date(startDateTime.getTime() + totalHoursNeeded * 60 * 60 * 1000) : null;
         
         const equipmentsStr = v.cranes.map(c => `${c.count}x ${c.model}`).join(', ');
-        const productiveHrs = Math.max(0, v.actualWorkingHrs - v.idleTime);
+        
+        // Generate Shift Breakdown
+        const shifts = [];
+        const numShifts = Math.ceil(totalHoursNeeded / v.shiftHours) || 1;
+        
+        for (let i = 1; i <= numShifts; i++) {
+            const shiftId = `shift_${i}`;
+            const sData = v.shiftData[shiftId] || { actualTph: 0, actualCycleTime: 0, actualWorkingHrs: 0, idleTime: 0 };
+            
+            const shiftStart = isValidDate ? new Date(startDateTime.getTime() + (i-1) * v.shiftHours * 60 * 60 * 1000) : null;
+            const shiftEnd = isValidDate ? new Date(startDateTime.getTime() + i * v.shiftHours * 60 * 60 * 1000) : null;
+            
+            shifts.push({
+                index: i,
+                id: shiftId,
+                start: shiftStart,
+                end: shiftEnd,
+                targetTph: totalTargetTph,
+                shiftTarget: totalTargetTph * v.shiftHours,
+                reqCycle: craneDetails.reduce((a, b) => a + b.requiredCycleTime, 0) / (craneDetails.length || 1),
+                actual: sData
+            });
+        }
 
         return {
             ...v,
@@ -216,8 +243,8 @@ index.html<!DOCTYPE html>
             totalHoursNeeded,
             finishDateTime,
             equipmentsStr,
-            productiveHrs,
-            isValidDate
+            isValidDate,
+            shifts
         };
     }
 
@@ -246,7 +273,7 @@ index.html<!DOCTYPE html>
                 main.innerHTML = `<div class="h-full flex items-center justify-center text-slate-300 uppercase font-black text-xl">Select a vessel</div>`;
             } else {
                 main.innerHTML = `
-                <div class="max-w-5xl mx-auto animate-in fade-in duration-500">
+                <div class="max-w-5xl mx-auto animate-in fade-in duration-500 pb-20">
                     <div class="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 mb-8 flex flex-col lg:flex-row justify-between gap-8">
                         <div class="flex-1">
                             <input onchange="updateVessel(${v.id}, 'name', this.value)" class="text-4xl font-black text-slate-800 focus:outline-none bg-transparent w-full border-b border-transparent focus:border-slate-100 mb-2" value="${v.name}" />
@@ -284,7 +311,7 @@ index.html<!DOCTYPE html>
 
                             <div class="space-y-4">
                                 ${v.craneDetails.map(c => `
-                                    <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row">
+                                    <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row group/crane">
                                         <div class="p-6 md:w-1/3 bg-slate-50 border-r border-slate-100 relative">
                                             <div class="flex gap-2 mb-4">
                                                 <select onchange="updateCrane(${v.id}, ${c.id}, 'model', this.value)" class="bg-white font-black text-slate-800 p-2 rounded-xl border border-slate-200 outline-none text-xs flex-1 truncate">
@@ -334,22 +361,26 @@ index.html<!DOCTYPE html>
                 </div>`;
             }
         } else {
-            // Table View
+            // Table View - MULTI-ROW Per Vessel (Shift Based)
             main.innerHTML = `
-            <div class="animate-in slide-in-from-right duration-500">
+            <div class="animate-in slide-in-from-right duration-500 pb-20">
                 <div class="bg-white rounded-[40px] shadow-sm border border-slate-200 overflow-hidden">
-                    <div class="p-8 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                        <div><h2 class="text-2xl font-black text-slate-800 tracking-tight">Ops Performance Tracking</h2></div>
-                        <div class="px-4 py-2 bg-blue-100 text-blue-700 rounded-xl text-xs font-black uppercase">Active: ${calculatedVessels.length}</div>
+                    <div class="p-8 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h2 class="text-2xl font-black text-slate-800 tracking-tight">Shift-by-Shift Ops Tracker</h2>
+                            <p class="text-slate-500 text-sm font-medium italic">Showing rows for every ${vessels[0]?.shiftHours || 12}hr shift duration.</p>
+                        </div>
+                        <div class="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-black uppercase shadow-lg">Total Shifts Active: ${calculatedVessels.reduce((a,b)=>a + b.shifts.length, 0)}</div>
                     </div>
                     <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse">
+                        <table class="w-full text-left border-collapse table-auto">
                             <thead>
-                                <tr class="bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest">
+                                <tr class="bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
+                                    <th class="p-5">Shift / Date</th>
                                     <th class="p-5">Vessel / Rotation</th>
                                     <th class="p-5">Berth</th>
-                                    <th class="p-5">Equipments</th>
-                                    <th class="p-5 border-l border-slate-800 bg-blue-900/50">Req TPH</th>
+                                    <th class="p-5 border-l border-slate-800 bg-blue-900/50 text-center">Shift Target (MT)</th>
+                                    <th class="p-5 bg-blue-900/50">Req TPH</th>
                                     <th class="p-5 bg-blue-900/50">Actual TPH</th>
                                     <th class="p-5 border-l border-slate-800 bg-orange-900/50">Req Cycle</th>
                                     <th class="p-5 bg-orange-900/50">Actual Cycle</th>
@@ -358,31 +389,51 @@ index.html<!DOCTYPE html>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100">
-                                ${calculatedVessels.map(v => `
-                                    <tr class="hover:bg-slate-50 transition-colors">
+                                ${calculatedVessels.map(v => v.shifts.map(shift => `
+                                    <tr class="hover:bg-blue-50/30 transition-colors">
+                                        <td class="p-5 font-bold text-[11px]">
+                                            <div class="text-slate-900">Shift ${shift.index}</div>
+                                            <div class="text-slate-400 font-medium">${shift.start ? shift.start.toLocaleDateString([], {month:'short', day:'numeric'}) : '--'}</div>
+                                            <div class="text-[9px] text-blue-500 font-black">${shift.start ? shift.start.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--'}</div>
+                                        </td>
                                         <td class="p-5">
-                                            <div class="font-black text-slate-800 uppercase">${v.name}</div>
-                                            <div class="text-[10px] text-slate-400 font-bold">${v.rotationNo}</div>
+                                            <div class="font-black text-slate-800 uppercase text-xs">${v.name}</div>
+                                            <div class="text-[9px] text-slate-400 font-bold">${v.rotationNo}</div>
                                         </td>
-                                        <td class="p-5"><span class="px-3 py-1 bg-orange-50 text-orange-600 rounded-full font-black text-[10px]">${v.berthNo}</span></td>
-                                        <td class="p-5 max-w-[150px] text-[10px] text-slate-400 font-medium truncate" title="${v.equipmentsStr}">${v.equipmentsStr}</td>
-                                        <td class="p-5 border-l border-slate-100 font-black text-blue-600 bg-blue-50/10">${v.totalTargetTph}</td>
-                                        <td class="p-5 bg-blue-50/10">
-                                            <div class="flex items-center gap-1 border-b border-blue-100"><input type="number" onchange="updateVessel(${v.id}, 'actualTph', this.value)" class="bg-transparent font-black w-14 outline-none" value="${v.actualTph || ''}" /><i data-lucide="edit-3" class="w-3 h-3 text-blue-300"></i></div>
+                                        <td class="p-5"><span class="px-3 py-1 bg-orange-50 text-orange-600 rounded-full font-black text-[9px]">${v.berthNo}</span></td>
+                                        
+                                        <td class="p-5 border-l border-slate-100 bg-blue-50/20 text-center font-black text-blue-900">
+                                            ${Math.round(shift.shiftTarget).toLocaleString()}
                                         </td>
-                                        <td class="p-5 border-l border-slate-100 font-black text-orange-600 bg-orange-50/10">${(v.craneDetails.reduce((a, b) => a + b.requiredCycleTime, 0) / (v.craneDetails.length || 1)).toFixed(0)}s</td>
-                                        <td class="p-5 bg-orange-50/10">
-                                            <div class="flex items-center gap-1 border-b border-orange-100"><input type="number" onchange="updateVessel(${v.id}, 'actualCycleTime', this.value)" class="bg-transparent font-black w-14 outline-none" value="${v.actualCycleTime || ''}" /><i data-lucide="edit-3" class="w-3 h-3 text-orange-300"></i></div>
+                                        <td class="p-5 bg-blue-50/20 font-black text-blue-600">
+                                            ${shift.targetTph}
                                         </td>
-                                        <td class="p-5 border-l border-slate-100 bg-slate-50/30">
-                                            <div class="flex gap-3">
-                                                <div class="flex flex-col"><span class="text-[8px] uppercase opacity-50 font-bold">W</span><input type="number" onchange="updateVessel(${v.id}, 'actualWorkingHrs', this.value)" class="w-8 font-bold border-b bg-transparent outline-none" value="${v.actualWorkingHrs || ''}" /></div>
-                                                <div class="flex flex-col text-red-500"><span class="text-[8px] uppercase opacity-50 font-bold">I</span><input type="number" onchange="updateVessel(${v.id}, 'idleTime', this.value)" class="w-8 font-bold border-b border-red-100 bg-transparent outline-none" value="${v.idleTime || ''}" /></div>
+                                        <td class="p-5 bg-blue-50/20">
+                                            <div class="flex items-center gap-1 border-b border-blue-200">
+                                                <input type="number" onchange="updateShiftData(${v.id}, '${shift.id}', 'actualTph', this.value)" class="bg-transparent font-black w-14 outline-none text-blue-800" value="${shift.actual.actualTph || ''}" />
+                                                <i data-lucide="edit-3" class="w-3 h-3 text-blue-300"></i>
                                             </div>
                                         </td>
-                                        <td class="p-5 bg-slate-50/30 font-black text-slate-800 text-lg">${v.productiveHrs.toFixed(1)} <span class="text-[8px] uppercase text-slate-400">Net</span></td>
+
+                                        <td class="p-5 border-l border-slate-100 font-black text-orange-600 bg-orange-50/20">${shift.reqCycle.toFixed(0)}s</td>
+                                        <td class="p-5 bg-orange-50/20">
+                                            <div class="flex items-center gap-1 border-b border-orange-200">
+                                                <input type="number" onchange="updateShiftData(${v.id}, '${shift.id}', 'actualCycleTime', this.value)" class="bg-transparent font-black w-14 outline-none text-orange-800" value="${shift.actual.actualCycleTime || ''}" />
+                                                <i data-lucide="edit-3" class="w-3 h-3 text-orange-300"></i>
+                                            </div>
+                                        </td>
+
+                                        <td class="p-5 border-l border-slate-100 bg-slate-50/30">
+                                            <div class="flex gap-3">
+                                                <div class="flex flex-col"><span class="text-[8px] uppercase opacity-50 font-bold">Work</span><input type="number" onchange="updateShiftData(${v.id}, '${shift.id}', 'actualWorkingHrs', this.value)" class="w-8 font-bold border-b bg-transparent outline-none" value="${shift.actual.actualWorkingHrs || ''}" /></div>
+                                                <div class="flex flex-col text-red-500"><span class="text-[8px] uppercase opacity-50 font-bold">Idle</span><input type="number" onchange="updateShiftData(${v.id}, '${shift.id}', 'idleTime', this.value)" class="w-8 font-bold border-b border-red-100 bg-transparent outline-none" value="${shift.actual.idleTime || ''}" /></div>
+                                            </div>
+                                        </td>
+                                        <td class="p-5 bg-slate-50/30 font-black text-slate-800 text-lg">
+                                            ${(Math.max(0, (shift.actual.actualWorkingHrs || 0) - (shift.actual.idleTime || 0))).toFixed(1)} <span class="text-[8px] uppercase text-slate-400">h</span>
+                                        </td>
                                     </tr>
-                                `).join('')}
+                                `).join('')).join('')}
                             </tbody>
                         </table>
                     </div>
@@ -391,15 +442,15 @@ index.html<!DOCTYPE html>
                 <div class="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
                         <div class="bg-blue-100 p-3 rounded-2xl text-blue-600"><i data-lucide="bar-chart-3" class="w-6 h-6"></i></div>
-                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fleet Actual TPH</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.actualTph, 0)}</div></div>
+                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Vessel Tonnage Target</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.target, 0).toLocaleString()} <span class="text-sm font-normal text-slate-400">MT</span></div></div>
                     </div>
                     <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
                         <div class="bg-orange-100 p-3 rounded-2xl text-orange-600"><i data-lucide="clock" class="w-6 h-6"></i></div>
-                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Productive</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.productiveHrs, 0).toFixed(1)}h</div></div>
+                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Planned Port Stay (Total)</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.totalHoursNeeded, 0).toFixed(1)}h</div></div>
                     </div>
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4 text-red-600">
-                        <div class="bg-red-50 p-3 rounded-2xl text-red-500"><i data-lucide="alert-circle" class="w-6 h-6"></i></div>
-                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Fleet Idle</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.idleTime, 0).toFixed(1)}h</div></div>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4 text-emerald-600">
+                        <div class="bg-emerald-50 p-3 rounded-2xl text-emerald-500"><i data-lucide="zap" class="w-6 h-6"></i></div>
+                        <div><div class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Overall Productivity Target</div><div class="text-2xl font-black">${calculatedVessels.reduce((a,b)=>a + b.totalTargetTph, 0)} <span class="text-sm font-normal text-slate-400">Combined TPH</span></div></div>
                     </div>
                 </div>
             </div>`;
